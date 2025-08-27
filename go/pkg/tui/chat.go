@@ -99,11 +99,10 @@ func (m *ChatModel) View() string {
 	if !m.ready {
 		return "\n  Initializing..."
 	}
-	header := m.HeaderView()
-	header = headerStyle.Render(header)
+
 	return fmt.Sprintf(
 		"%s\n%s\n%s",
-		header,
+		m.HeaderView(),
 		m.viewport.View(),
 		inputBoxStyle.Render(m.textarea.View()),
 	)
@@ -176,8 +175,6 @@ func timeNow() string {
 
 func listenForMessages(session ssh.Session) tea.Cmd {
 	return func() tea.Msg {
-		// In a real implementation, this would listen to a channel
-		// or websocket for messages from other users
 		return nil
 	}
 }
@@ -211,7 +208,6 @@ func (m *ChatModel) handleWindowResize(message tea.WindowSizeMsg) {
 		inner = minTextareaInnerWidth
 	}
 	m.textarea.SetWidth(inner)
-
 	m.updateViewport()
 }
 
@@ -231,7 +227,4 @@ func configureTextarea(ta *textarea.Model) {
 	st.Placeholder = st.Placeholder.
 		Foreground(lipgloss.Color(textMuted)).
 		Italic(true)
-	st.Prompt = st.Prompt.Foreground(lipgloss.Color(titleColor)).Bold(true)
-	st.Text = st.Text.Foreground(lipgloss.Color("#E6E6E6"))
-	st.CursorLine = st.CursorLine.Background(lipgloss.Color("#2A2A2A"))
 }
