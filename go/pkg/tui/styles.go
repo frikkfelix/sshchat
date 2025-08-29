@@ -12,7 +12,6 @@ var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color(colorAccent)).
-			PaddingLeft(2).
 			PaddingBottom(1)
 
 	timeStyle = lipgloss.NewStyle().
@@ -20,11 +19,7 @@ var (
 
 	userStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorAccent)).
-			PaddingLeft(1)
-
-	messageStyle = lipgloss.NewStyle().
-			PaddingLeft(3)
+			Foreground(lipgloss.Color(colorAccent))
 
 	inputBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -34,4 +29,11 @@ var (
 	cursorStyle = lipgloss.
 			NewStyle().
 			Foreground(lipgloss.Color(cursorColor))
+
+	statusStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#333333")).
+			Foreground(lipgloss.Color("#FFFFFF"))
+
+	appFrameStyle = lipgloss.NewStyle().
+			Padding(1, 2)
 )

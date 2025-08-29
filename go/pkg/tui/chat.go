@@ -3,89 +3,91 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/ssh"
+	"github.com/frikkfelix/sshchat/go/pkg/core"
 )
 
-const (
-	textareaCharLimit     = 280
-	minViewportHeight     = 3
-	minTextareaInnerWidth = 10
-	placeholderText       = "Type a message..."
-)
+type Model struct {
+	session *core.Session
+	hub     *core.Hub
 
-type ChatModel struct {
-	username string
-	messages []Message
+	messages []core.Message
 	viewport viewport.Model
 	textarea textarea.Model
-	session  ssh.Session
-	width    int
-	height   int
-	ready    bool
+
+	width  int
+	height int
+	ready  bool
 }
 
-type Message struct {
-	Username string
-	Text     string
-	Time     string
-}
+type msgReceived core.Message
 
-type msgReceived Message
-
-func NewChatModel(username string, session ssh.Session) *ChatModel {
+func NewModel(session *core.Session, h *core.Hub) *Model {
 	ta := textarea.New()
 	configureTextarea(&ta)
 
-	vp := viewport.New(3, 5)
-
-	return &ChatModel{
-		username: username,
-		messages: []Message{},
-		textarea: ta,
-		viewport: vp,
+	return &Model{
 		session:  session,
+		hub:      h,
+		messages: []core.Message{},
+		textarea: ta,
+		viewport: viewport.New(80, 20),
 	}
 }
 
-func (m *ChatModel) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		textarea.Blink,
-		listenForMessages(m.session),
+		m.listenForMessages(),
 	)
 }
 
-func (m *ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-	var cmd tea.Cmd
+func (m *Model) listenForMessages() tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-m.session.Messages()
+		if !ok {
+			return tea.Quit
+		}
+		return msgReceived(*msg)
+	}
+}
 
-	switch message := msg.(type) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch message.Type {
-		case tea.KeyEscape, tea.KeyCtrlC:
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
+			m.session.Close()
 			return m, tea.Quit
+
 		case tea.KeyEnter:
-			trimmed := strings.TrimSpace(m.textarea.Value())
-			if trimmed != "" {
-				quitCmd := m.sendMessage(trimmed)
+			text := strings.TrimSpace(m.textarea.Value())
+			if text != "" {
+				if strings.HasPrefix(text, "/") {
+					m.handleCommand(text)
+				} else {
+					m.session.SendMessage(text)
+				}
 				m.textarea.Reset()
-				cmds = append(cmds, quitCmd)
 			}
 		}
 
 	case tea.WindowSizeMsg:
-		m.handleWindowResize(message)
+		m.handleResize(msg)
+
 	case msgReceived:
-		m.messages = append(m.messages, Message(message))
+		m.messages = append(m.messages, core.Message(msg))
 		m.updateViewport()
-		cmds = append(cmds, listenForMessages(m.session))
+		cmds = append(cmds, m.listenForMessages())
 	}
 
+	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
 	cmds = append(cmds, cmd)
 
@@ -95,127 +97,125 @@ func (m *ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *ChatModel) View() string {
+func (m *Model) View() string {
 	if !m.ready {
 		return "\n  Initializing..."
 	}
 
-	return fmt.Sprintf(
-		"%s\n%s\n%s",
-		m.HeaderView(),
+	content := fmt.Sprintf(
+		"%s\n%s\n%s\n%s",
+		m.headerView(),
 		m.viewport.View(),
-		inputBoxStyle.Render(m.textarea.View()),
-	)
+		m.statusBar(),
+		inputBoxStyle.Render(m.textarea.View()))
+
+	return appFrameStyle.Render(content)
 }
 
-func (m *ChatModel) sendMessage(text string) tea.Cmd {
-	if strings.HasPrefix(text, "/") {
-		return m.handleCommand(text)
+func (m *Model) handleCommand(input string) {
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		return
 	}
 
-	msg := Message{
-		Username: m.username,
-		Text:     text,
-		Time:     timeNow(),
+	cmd := core.Command{
+		Name: parts[0][1:],
+		Args: parts[1:],
 	}
 
-	m.messages = append(m.messages, msg)
-	m.updateViewport()
-
-	// broadcast message to other users
-	return nil
+	m.session.SendCommand(cmd)
 }
 
-func (m *ChatModel) handleCommand(cmd string) tea.Cmd {
-	var quitCmd tea.Cmd
-
-	switch cmd {
-	case "/help":
-		m.messages = append(m.messages, Message{
-			Username: "System",
-			Text:     "Commands: /help, /clear, /quit",
-			Time:     timeNow(),
-		})
-	case "/clear":
-		m.messages = []Message{}
-	case "/quit":
-		quitCmd = tea.Quit
-	default:
-		m.messages = append(m.messages, Message{
-			Username: "System",
-			Text:     fmt.Sprintf("Unknown command: %s", cmd),
-			Time:     timeNow(),
-		})
-	}
-	m.updateViewport()
-	return quitCmd
-}
-
-func (m *ChatModel) updateViewport() {
+func (m *Model) updateViewport() {
 	var content strings.Builder
 	for _, msg := range m.messages {
-		content.WriteString(formatMessage(msg))
+		content.WriteString(m.formatMessage(msg))
 		content.WriteString("\n\n")
 	}
-	m.viewport.SetContent(content.String())
+
+	wrapped := lipgloss.NewStyle().
+		Width(m.viewport.Width).
+		Render(content.String())
+
+	m.viewport.SetContent(wrapped)
 	m.viewport.GotoBottom()
 }
 
-func formatMessage(msg Message) string {
-	user := userStyle.Render(msg.Username + ":")
-	text := messageStyle.Render(msg.Text)
-	return fmt.Sprintf("%s %s\n%s", user, timeStyle.Render(msg.Time), text)
-}
+func (m *Model) formatMessage(msg core.Message) string {
+	timestamp := timeStyle.Render(fmt.Sprintf("%s", msg.Timestamp.Format("15:04")))
+	user := userStyle.Render(msg.Username)
 
-func timeNow() string {
-	return fmt.Sprintf("%02d:%02d",
-		time.Now().Hour(),
-		time.Now().Minute())
-}
-
-func listenForMessages(session ssh.Session) tea.Cmd {
-	return func() tea.Msg {
-		return nil
+	switch msg.Type {
+	case core.MessageTypeSystem, core.MessageTypeJoin, core.MessageTypeLeave:
+		return lipgloss.
+			NewStyle().
+			Render(fmt.Sprintf("%s %s", msg.Text, timestamp))
+	default:
+		return fmt.Sprintf("%s %s\n%s", user, timestamp, msg.Text)
 	}
 }
 
-func (m *ChatModel) handleWindowResize(message tea.WindowSizeMsg) {
-	m.width = message.Width
-	m.height = message.Height
+func (m *Model) headerView() string {
+	headerContent := `
+█▀ █▀ █ █ █▀▀ █ █ ▄▀█ ▀█▀
+▄█ ▄█ █▀█ █▄▄ █▀█ █▀█  █
+`
+	return titleStyle.Render(headerContent)
+}
 
-	headerHeight := lipgloss.Height(m.HeaderView())
-	inputHeight := lipgloss.Height(inputBoxStyle.Render(m.textarea.View()))
-
-	vpHeight := message.Height - headerHeight - inputHeight
-	if vpHeight < minViewportHeight {
-		vpHeight = minViewportHeight
+func (m *Model) statusBar() string {
+	channel := m.session.CurrentChannel
+	if channel == "" {
+		channel = "none"
 	}
+	return statusStyle.Render(fmt.Sprintf("#%s | %s", channel, m.session.Username))
+}
+
+func (m *Model) handleResize(msg tea.WindowSizeMsg) {
+	m.width = msg.Width
+	m.height = msg.Height
+
+	outerHFrame, outerVFrame := appFrameStyle.GetFrameSize()
+	innerWidth := msg.Width - outerHFrame
+	if innerWidth < 0 {
+		innerWidth = 0
+	}
+	innerHeight := msg.Height - outerVFrame
+	if innerHeight < 0 {
+		innerHeight = 0
+	}
+
+	headerHeight := lipgloss.Height(m.headerView())
+	statusHeight := lipgloss.Height(statusStyle.Render(m.statusBar()))
+
+	inputHFrame, inputVFrame := inputBoxStyle.GetFrameSize()
+	inputHeight := m.textarea.Height() + inputVFrame
+
+	viewportHeight := innerHeight - headerHeight - statusHeight - inputHeight
+	if viewportHeight < 3 {
+		viewportHeight = 3
+	}
+
+	m.viewport.Width = innerWidth
+	m.viewport.Height = viewportHeight
+
+	textAreaWidth := innerWidth - inputHFrame
+	if textAreaWidth < 0 {
+		textAreaWidth = 0
+	}
+	m.textarea.SetWidth(textAreaWidth)
+	m.updateViewport()
 
 	if !m.ready {
-		m.viewport = viewport.New(message.Width, vpHeight)
-		m.viewport.YPosition = headerHeight
 		m.ready = true
-	} else {
-		m.viewport.Width = message.Width
-		m.viewport.Height = vpHeight
-		m.viewport.YPosition = headerHeight
 	}
-
-	m.viewport.Style = m.viewport.Style.PaddingLeft(1)
-
-	inner := message.Width - inputBoxStyle.GetHorizontalPadding() - inputBoxStyle.GetHorizontalBorderSize()
-	if inner < minTextareaInnerWidth {
-		inner = minTextareaInnerWidth
-	}
-	m.textarea.SetWidth(inner)
-	m.updateViewport()
 }
 
 func configureTextarea(ta *textarea.Model) {
-	ta.Placeholder = placeholderText
+	ta.Placeholder = "Type a message..."
 	ta.Focus()
 	ta.Prompt = ""
-	ta.CharLimit = textareaCharLimit
+	ta.CharLimit = 280
 	ta.Cursor.TextStyle.Bold(false)
 	ta.Cursor.Style = cursorStyle
 	ta.ShowLineNumbers = false

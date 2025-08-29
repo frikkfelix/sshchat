@@ -1,8 +1,7 @@
 package server
 
 import (
-	"crypto/md5"
-	"encoding/hex"
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -14,9 +13,11 @@ import (
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
+	"github.com/frikkfelix/sshchat/go/pkg/core"
 	"github.com/frikkfelix/sshchat/go/pkg/tui"
 	"github.com/google/uuid"
 	gossh "golang.org/x/crypto/ssh"
+	xssh "golang.org/x/crypto/ssh"
 )
 
 const (
@@ -24,8 +25,29 @@ const (
 	port = "42069"
 )
 
-func NewServer() (*ssh.Server, error) {
-	return wish.NewServer(
+type Server struct {
+	hub *core.Hub
+	SSH *ssh.Server
+}
+
+func New(hub *core.Hub) (*Server, error) {
+	teaHandler := func(s ssh.Session) (tea.Model, []tea.ProgramOption) {
+		session := core.NewSession(s)
+		hub.RegisterSession(session)
+
+		go func() {
+			<-s.Context().Done()
+			session.Close()
+		}()
+
+		model := tui.NewModel(session, hub)
+
+		return model, []tea.ProgramOption{
+			tea.WithAltScreen(),
+			tea.WithMouseCellMotion(),
+		}
+	}
+	wishServer, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf("%s:%s", host, port)),
 		wish.WithMiddleware(
 			bubbletea.Middleware(teaHandler),
@@ -33,20 +55,22 @@ func NewServer() (*ssh.Server, error) {
 			logging.Middleware(),
 		),
 		wish.WithPublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
-			hash := md5.Sum(key.Marshal())
-			fingerprint := hex.EncodeToString(hash[:])
+			fingerprint := xssh.FingerprintSHA256(key.(gossh.PublicKey))
 			ctx.SetValue("fingerprint", fingerprint)
-			ctx.SetValue("anonymous", false)
 			return true
 		}),
 		wish.WithKeyboardInteractiveAuth(
 			func(ctx ssh.Context, challenger gossh.KeyboardInteractiveChallenge) bool {
 				ctx.SetValue("fingerprint", uuid.NewString())
-				ctx.SetValue("anonymous", true)
 				return true
 			},
 		),
 	)
+
+	return &Server{
+		hub: hub,
+		SSH: wishServer,
+	}, err
 }
 
 func WaitForShutdown() {
@@ -55,15 +79,17 @@ func WaitForShutdown() {
 	<-shutdownCh
 }
 
-func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
-	username := s.User()
-	if username == "" {
-		username = "anonymous"
-	}
+func (s *Server) Shutdown(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		_ = s.SSH.Close()
+		close(done)
+	}()
 
-	m := tui.NewChatModel(username, s)
-	return m, []tea.ProgramOption{
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
