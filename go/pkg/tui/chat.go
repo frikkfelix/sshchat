@@ -143,7 +143,14 @@ func (m *Model) updateViewport() {
 
 func (m *Model) formatMessage(msg core.Message) string {
 	timestamp := timeStyle.Render(fmt.Sprintf("%s", msg.Timestamp.Format("15:04")))
-	user := userStyle.Render(msg.Username)
+
+	key := msg.UserID
+
+	if key == "" {
+		key = msg.Username
+	}
+
+	user := UserStyle(key).Render(msg.Username)
 
 	switch msg.Type {
 	case core.MessageTypeSystem, core.MessageTypeJoin, core.MessageTypeLeave:

@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"sync"
 )
 
@@ -133,16 +132,6 @@ func (h *Hub) joinChannel(session *Session, channelName string) {
 	for _, msg := range channel.GetRecentHistory(20) {
 		h.sendToSession(session, msg)
 	}
-
-	joinMsg := NewMessage(
-		MessageTypeJoin,
-		channelName,
-		"system",
-		"System",
-		fmt.Sprintf("%s joined #%s", session.Username, channelName),
-	)
-
-	channel.Broadcast(joinMsg, h.sessions)
 }
 
 func (h *Hub) sendToSession(session *Session, msg *Message) {
