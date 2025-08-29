@@ -3,56 +3,89 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 const (
-	colorAccent = "#7D56F4"
-	textMuted   = "#666666"
-	cursorColor = "#7D56F4"
+	textMuted = "#666666"
+
+	colorRosewater = "#f5e0dc"
+	colorFlamingo  = "#f2cdcd"
+	colorPink      = "#f5c2e7"
+	colorMauve     = "#cba6f7"
+	colorRed       = "#f38ba8"
+	colorMaroon    = "#eba0ac"
+	colorPeach     = "#fab387"
+	colorYellow    = "#f9e2af"
+	colorGreen     = "#a6e3a1"
+	colorTeal      = "#94e2d5"
+	colorSky       = "#89dceb"
+	colorSapphire  = "#74c7ec"
+	colorBlue      = "#89b4fa"
+	colorLavender  = "#b4befe"
+	colorWhite     = "#FFFFFF"
 )
 
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorAccent)).
+			Foreground(lipgloss.Color(colorPeach)).
 			PaddingBottom(1)
 
 	timeStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(textMuted))
 
 	inputBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color(colorAccent)).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(colorPeach)).
 			Padding(0, 1)
 
 	cursorStyle = lipgloss.
 			NewStyle().
-			Foreground(lipgloss.Color(cursorColor))
+			Foreground(lipgloss.Color(colorPeach))
 
 	statusStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#333333")).
-			Foreground(lipgloss.Color("#FFFFFF"))
+			Foreground(lipgloss.Color(colorWhite))
 
 	appFrameStyle = lipgloss.NewStyle().
 			Padding(1, 2)
 )
 
 var userPalette = []string{
-	"#E06C75",
-	"#E5C07B",
-	"#98C379",
-	"#56B6C2",
-	"#61AFEF",
-	"#C678DD",
-	"#D19A66",
-	"#8BE9FD",
-	"#50FA7B",
-	"#BD93F9",
+	colorRed,
+	colorYellow,
+	colorGreen,
+	colorTeal,
+	colorBlue,
+	colorMauve,
+	colorPeach,
+	colorSky,
+	colorLavender,
+	colorSapphire,
+	colorPink,
+	colorFlamingo,
+	colorRosewater,
+	colorMaroon,
+	colorWhite,
 }
 
 func UserStyle(key string) lipgloss.Style {
 	if key == "" {
-		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colorAccent))
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colorLavender))
 	}
 	idx := int(fnv32a(key) % uint32(len(userPalette)))
 	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(userPalette[idx]))
+}
+
+func ModeStyle(mode Mode) lipgloss.Style {
+	switch mode {
+	case Insert:
+		return lipgloss.NewStyle().
+			Background(lipgloss.Color(colorPeach)).
+			Foreground(lipgloss.Color("#000000")).
+			Padding(0, 1)
+	default:
+		return lipgloss.NewStyle().
+			Background(lipgloss.Color(colorSapphire)).
+			Foreground(lipgloss.Color("#000000")).
+			Padding(0, 1)
+	}
 }
 
 func fnv32a(s string) uint32 {

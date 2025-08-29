@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -17,7 +16,8 @@ type Model struct {
 
 	messages []core.Message
 	viewport viewport.Model
-	textarea textarea.Model
+
+	input *InputController
 
 	width  int
 	height int
@@ -27,21 +27,18 @@ type Model struct {
 type msgReceived core.Message
 
 func NewModel(session *core.Session, h *core.Hub) *Model {
-	ta := textarea.New()
-	configureTextarea(&ta)
-
 	return &Model{
 		session:  session,
 		hub:      h,
 		messages: []core.Message{},
-		textarea: ta,
+		input:    NewInputController(),
 		viewport: viewport.New(80, 20),
 	}
 }
 
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
-		textarea.Blink,
+		m.input.InitCmd(),
 		m.listenForMessages(),
 	)
 }
@@ -59,40 +56,66 @@ func (m *Model) listenForMessages() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	switch msg := msg.(type) {
+	switch v := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		if v.Type == tea.KeyCtrlC {
 			m.session.Close()
 			return m, tea.Quit
+		}
 
-		case tea.KeyEnter:
-			text := strings.TrimSpace(m.textarea.Value())
-			if text != "" {
-				if strings.HasPrefix(text, "/") {
-					m.handleCommand(text)
-				} else {
-					m.session.SendMessage(text)
-				}
-				m.textarea.Reset()
+		if cmd, handled := m.input.HandleKey(v, m.session); handled {
+			if cmd != nil {
+				cmds = append(cmds, cmd)
 			}
+			return m, tea.Batch(cmds...)
+		}
+
+		if m.input.Mode() == Normal {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(v)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
+		if cmd := m.input.Update(v); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 
 	case tea.WindowSizeMsg:
-		m.handleResize(msg)
+		m.handleResize(v)
+		inputHFrame, inputVFrame := inputBoxStyle.GetFrameSize()
+		textAreaWidth := m.viewport.Width - inputHFrame
+		if textAreaWidth < 0 {
+			textAreaWidth = 0
+		}
+		m.input.OnResize(textAreaWidth, m.viewport.Height, lipgloss.Height(m.statusBar()), inputVFrame)
+
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(v)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if cmd := m.input.Update(v); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	case msgReceived:
-		m.messages = append(m.messages, core.Message(msg))
+		m.messages = append(m.messages, core.Message(v))
 		m.updateViewport()
 		cmds = append(cmds, m.listenForMessages())
+
+	default:
+		if cmd := m.input.Update(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
-
-	var cmd tea.Cmd
-	m.textarea, cmd = m.textarea.Update(msg)
-	cmds = append(cmds, cmd)
-
-	m.viewport, cmd = m.viewport.Update(msg)
-	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
 }
@@ -106,24 +129,11 @@ func (m *Model) View() string {
 		"%s\n%s\n%s\n%s",
 		m.headerView(),
 		m.viewport.View(),
+		inputBoxStyle.Render(m.input.InlineView()),
 		m.statusBar(),
-		inputBoxStyle.Render(m.textarea.View()))
+	)
 
 	return appFrameStyle.Render(content)
-}
-
-func (m *Model) handleCommand(input string) {
-	parts := strings.Fields(input)
-	if len(parts) == 0 {
-		return
-	}
-
-	cmd := core.Command{
-		Name: parts[0][1:],
-		Args: parts[1:],
-	}
-
-	m.session.SendCommand(cmd)
 }
 
 func (m *Model) updateViewport() {
@@ -156,7 +166,7 @@ func (m *Model) formatMessage(msg core.Message) string {
 	case core.MessageTypeSystem, core.MessageTypeJoin, core.MessageTypeLeave:
 		return lipgloss.
 			NewStyle().
-			Render(fmt.Sprintf("%s %s", msg.Text, timestamp))
+			Render(fmt.Sprintf("%s\n%s", timestamp, msg.Text))
 	default:
 		return fmt.Sprintf("%s %s\n%s", user, timestamp, msg.Text)
 	}
@@ -175,7 +185,21 @@ func (m *Model) statusBar() string {
 	if channel == "" {
 		channel = "none"
 	}
-	return statusStyle.Render(fmt.Sprintf("#%s | %s", channel, m.session.Username))
+
+	left := fmt.Sprintf("#%s | %s", channel, m.session.Username)
+	right := ModeStyle(m.input.Mode()).Render(m.input.StatusLabel())
+
+	totalWidth := m.viewport.Width
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+
+	gap := totalWidth - leftW - rightW
+	if gap < 1 {
+		gap = 1
+	}
+
+	line := left + strings.Repeat(" ", gap) + right
+	return statusStyle.Render(line)
 }
 
 func (m *Model) handleResize(msg tea.WindowSizeMsg) {
@@ -196,7 +220,11 @@ func (m *Model) handleResize(msg tea.WindowSizeMsg) {
 	statusHeight := lipgloss.Height(statusStyle.Render(m.statusBar()))
 
 	inputHFrame, inputVFrame := inputBoxStyle.GetFrameSize()
-	inputHeight := m.textarea.Height() + inputVFrame
+	textAreaWidth := innerWidth - inputHFrame
+	if textAreaWidth < 0 {
+		textAreaWidth = 0
+	}
+	inputHeight := m.input.InlineHeight() + inputVFrame
 
 	viewportHeight := innerHeight - headerHeight - statusHeight - inputHeight
 	if viewportHeight < 3 {
@@ -206,32 +234,10 @@ func (m *Model) handleResize(msg tea.WindowSizeMsg) {
 	m.viewport.Width = innerWidth
 	m.viewport.Height = viewportHeight
 
-	textAreaWidth := innerWidth - inputHFrame
-	if textAreaWidth < 0 {
-		textAreaWidth = 0
-	}
-	m.textarea.SetWidth(textAreaWidth)
+	m.input.OnResize(textAreaWidth, viewportHeight, statusHeight, inputVFrame)
 	m.updateViewport()
 
 	if !m.ready {
 		m.ready = true
 	}
-}
-
-func configureTextarea(ta *textarea.Model) {
-	ta.Placeholder = "Type a message..."
-	ta.Focus()
-	ta.Prompt = ""
-	ta.CharLimit = 280
-	ta.Cursor.TextStyle.Bold(false)
-	ta.Cursor.Style = cursorStyle
-	ta.ShowLineNumbers = false
-	ta.SetHeight(3)
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.KeyMap.InsertNewline.SetEnabled(false)
-
-	st, _ := textarea.DefaultStyles()
-	st.Placeholder = st.Placeholder.
-		Foreground(lipgloss.Color(textMuted)).
-		Italic(true)
 }
