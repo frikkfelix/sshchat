@@ -26,6 +26,8 @@ func (h *Hub) executeCommand(session *Session, cmd Command) {
 		if len(cmd.Args) >= 2 {
 			h.cmdDirectMessage(session, cmd.Args[0], strings.Join(cmd.Args[1:], " "))
 		}
+	case "quit", "q", "q!":
+		h.cmdQuit(session)
 	default:
 		h.sendToSession(session, NewMessage(
 			MessageTypeError,
@@ -139,4 +141,8 @@ func (h *Hub) cmdDirectMessage(session *Session, recipient, message string) {
 
 	h.sendToSession(session, dm)
 	h.sendToSession(targetSession, dm)
+}
+
+func (h *Hub) cmdQuit(session *Session) {
+	session.Close()
 }

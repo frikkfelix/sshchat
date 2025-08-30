@@ -63,6 +63,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+		if m.input.Mode() == Command {
+			if cmd, handled := m.input.HandleKey(v, m.session); handled {
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+			if cmd := m.input.Update(v); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
 		if cmd, handled := m.input.HandleKey(v, m.session); handled {
 			if cmd != nil {
 				cmds = append(cmds, cmd)
@@ -125,15 +138,16 @@ func (m *Model) View() string {
 		return "\n  Initializing..."
 	}
 
-	content := fmt.Sprintf(
+	inputRow := inputBoxStyle.Render(m.input.InlineView())
+	status := m.statusBar()
+
+	return appFrameStyle.Render(fmt.Sprintf(
 		"%s\n%s\n%s\n%s",
 		m.headerView(),
 		m.viewport.View(),
-		inputBoxStyle.Render(m.input.InlineView()),
-		m.statusBar(),
-	)
-
-	return appFrameStyle.Render(content)
+		inputRow,
+		status,
+	))
 }
 
 func (m *Model) updateViewport() {
@@ -187,19 +201,41 @@ func (m *Model) statusBar() string {
 	}
 
 	left := fmt.Sprintf("#%s | %s", channel, m.session.Username)
-	right := ModeStyle(m.input.Mode()).Render(m.input.StatusLabel())
-
-	totalWidth := m.viewport.Width
+	total := m.viewport.Width
 	leftW := lipgloss.Width(left)
+
+	right := ModeStyle(m.input.Mode()).Render(m.input.StatusLabel())
 	rightW := lipgloss.Width(right)
 
-	gap := totalWidth - leftW - rightW
-	if gap < 1 {
-		gap = 1
+	gap := total - leftW - rightW - 2
+	if gap < 0 {
+		gap = 0
 	}
 
-	line := left + strings.Repeat(" ", gap) + right
-	return statusStyle.Render(line)
+	middle := ""
+	if m.input.Mode() == Command && gap > 0 {
+		middle = m.input.CommandInline(gap)
+		if lipgloss.Width(middle) > gap {
+			middle = lipgloss.NewStyle().Width(gap).Render(middle)
+		}
+	}
+
+	line := left
+	line += " "
+	if m.input.Mode() == Command && gap > 0 {
+		midW := lipgloss.Width(middle)
+		if midW < gap {
+			middle = middle + strings.Repeat(" ", gap-midW)
+		}
+		line += middle
+	} else {
+		if gap > 0 {
+			line += strings.Repeat(" ", gap)
+		}
+	}
+
+	line += " " + right
+	return statusStyle.Copy().Width(total).Render(line)
 }
 
 func (m *Model) handleResize(msg tea.WindowSizeMsg) {
@@ -216,8 +252,11 @@ func (m *Model) handleResize(msg tea.WindowSizeMsg) {
 		innerHeight = 0
 	}
 
+	m.viewport.Width = innerWidth
+
 	headerHeight := lipgloss.Height(m.headerView())
-	statusHeight := lipgloss.Height(statusStyle.Render(m.statusBar()))
+	statusRendered := m.statusBar()
+	statusHeight := lipgloss.Height(statusRendered)
 
 	inputHFrame, inputVFrame := inputBoxStyle.GetFrameSize()
 	textAreaWidth := innerWidth - inputHFrame
@@ -226,18 +265,17 @@ func (m *Model) handleResize(msg tea.WindowSizeMsg) {
 	}
 	inputHeight := m.input.InlineHeight() + inputVFrame
 
-	viewportHeight := innerHeight - headerHeight - statusHeight - inputHeight
+	viewportHeight := innerHeight - headerHeight - inputHeight - statusHeight
 	if viewportHeight < 3 {
 		viewportHeight = 3
 	}
-
-	m.viewport.Width = innerWidth
 	m.viewport.Height = viewportHeight
-
 	m.input.OnResize(textAreaWidth, viewportHeight, statusHeight, inputVFrame)
+
 	m.updateViewport()
 
 	if !m.ready {
 		m.ready = true
 	}
+
 }

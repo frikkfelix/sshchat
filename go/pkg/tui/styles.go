@@ -43,8 +43,7 @@ var (
 	statusStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorWhite))
 
-	appFrameStyle = lipgloss.NewStyle().
-			Padding(1, 2)
+	appFrameStyle = lipgloss.NewStyle().PaddingBottom(1).PaddingLeft(1).PaddingRight(1)
 )
 
 var userPalette = []string{
@@ -80,9 +79,14 @@ func ModeStyle(mode Mode) lipgloss.Style {
 			Background(lipgloss.Color(colorPeach)).
 			Foreground(lipgloss.Color("#000000")).
 			Padding(0, 1)
+	case Command:
+		return lipgloss.NewStyle().
+			Background(lipgloss.Color(colorBlue)).
+			Foreground(lipgloss.Color("#000000")).
+			Padding(0, 1)
 	default:
 		return lipgloss.NewStyle().
-			Background(lipgloss.Color(colorSapphire)).
+			Background(lipgloss.Color(colorGreen)).
 			Foreground(lipgloss.Color("#000000")).
 			Padding(0, 1)
 	}

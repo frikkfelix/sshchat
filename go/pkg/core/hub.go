@@ -3,6 +3,9 @@ package core
 import (
 	"context"
 	"sync"
+	"time"
+
+	"github.com/charmbracelet/log"
 )
 
 type Hub struct {
@@ -24,24 +27,23 @@ func NewHub() *Hub {
 	h := &Hub{
 		sessions:   make(map[string]*Session),
 		channels:   make(map[string]*Channel),
-		register:   make(chan *Session),
-		unregister: make(chan string),
+		register:   make(chan *Session, 16),
+		unregister: make(chan string, 16),
 		ctx:        ctx,
 		cancel:     cancel,
 	}
 
 	h.createChannel("general", "General discussion")
-	h.createChannel("random", "Random chat")
-	h.createChannel("help", "Get help here")
+	h.createChannel("random", "Random")
 
 	return h
 }
 
 func (h *Hub) Run() {
+	defer h.cleanup()
 	for {
 		select {
 		case <-h.ctx.Done():
-			h.cleanup()
 			return
 
 		case session := <-h.register:
@@ -75,10 +77,27 @@ func (h *Hub) handleSession(session *Session) {
 
 func (h *Hub) handleRegister(session *Session) {
 	h.mu.Lock()
-	h.sessions[session.ID] = session
-	h.mu.Unlock()
+	defer h.mu.Unlock()
 
-	h.joinChannel(session, "general")
+	select {
+	case <-h.ctx.Done():
+		session.Close()
+		return
+	default:
+	}
+
+	if _, exists := h.sessions[session.ID]; exists {
+		log.Warn("Session %s already registered", session.ID)
+		return
+	}
+
+	h.sessions[session.ID] = session
+
+	go func() {
+		_, cancel := context.WithTimeout(h.ctx, 1*time.Second)
+		defer cancel()
+		h.joinChannel(session, "general")
+	}()
 }
 
 func (h *Hub) handleUnregister(sessionID string) {
@@ -96,7 +115,22 @@ func (h *Hub) handleUnregister(sessionID string) {
 	delete(h.sessions, sessionID)
 	h.mu.Unlock()
 
-	close(session.outbox)
+	go func() {
+		timer := time.NewTimer(100 * time.Millisecond)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+		case <-func() chan struct{} {
+			done := make(chan struct{})
+			go func() {
+				close(session.outbox)
+				close(done)
+			}()
+			return done
+		}():
+		}
+	}()
 }
 
 func (h *Hub) broadcastToChannel(msg *Message) {
